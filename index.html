@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Web Camera Frame Tool</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: sans-serif;
+        }
+
+        /* カメラ映像 */
+        #video-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* 重ねるフレーム */
+        #frame-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            will-change: transform;
+            touch-action: none; /* ブラウザのデフォルト操作を無効化 */
+            pointer-events: auto;
+            cursor: move;
+        }
+
+        #frame-img {
+            max-width: none;
+            display: none;
+        }
+
+        /* UIパネル */
+        .controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 100;
+        }
+
+        button, label {
+            background: rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+            color: white;
+            border: 1px solid white;
+            padding: 12px 20px;
+            border-radius: 30px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        #shutter {
+            background: #ff4757;
+            border: none;
+            font-weight: bold;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        #canvas-output {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="video-container">
+    <video id="video" autoplay playsinline></video>
+    <div id="frame-layer">
+        <img id="frame-img" src="" alt="Frame">
+    </div>
+</div>
+
+<div class="controls">
+    <label for="file-input">フレーム選択</label>
+    <input type="file" id="file-input" accept="image/png">
+    <button id="shutter">撮影</button>
+</div>
+
+<canvas id="canvas-output"></canvas>
+
+<script>
+    const video = document.getElementById('video');
+    const frameLayer = document.getElementById('frame-layer');
+    const frameImg = document.getElementById('frame-img');
+    const fileInput = document.getElementById('file-input');
+    const shutter = document.getElementById('shutter');
+    const canvas = document.getElementById('canvas-output');
+
+    // --- カメラ設定 ---
+    async function startCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' },
+                audio: false
+            });
+            video.srcObject = stream;
+        } catch (err) {
+            alert("カメラの起動に失敗しました: " + err);
+        }
+    }
+
+    // --- フレーム読み込み ---
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            frameImg.src = event.target.result;
+            frameImg.style.display = 'block';
+            // 初期位置を中央に
+            resetFramePosition();
+        };
+        reader.readAsDataURL(file);
+    });
+
+    function resetFramePosition() {
+        state.x = window.innerWidth / 4;
+        state.y = window.innerHeight / 4;
+        state.scale = 0.5;
+        updateTransform();
+    }
+
+    // --- 拡大・縮小・移動のロジック ---
+    let state = { x: 0, y: 0, scale: 1, lastX: 0, lastY: 0, lastDist: 0 };
+    let isDragging = false;
+
+    frameLayer.addEventListener('touchstart', (e) => {
+        if (e.touches.length === 1) {
+            isDragging = true;
+            state.lastX = e.touches[0].clientX - state.x;
+            state.lastY = e.touches[0].clientY - state.y;
+        } else if (e.touches.length === 2) {
+            state.lastDist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+        }
+    });
+
+    frameLayer.addEventListener('touchmove', (e) => {
+        if (isDragging && e.touches.length === 1) {
+            state.x = e.touches[0].clientX - state.lastX;
+            state.y = e.touches[0].clientY - state.lastY;
+        } else if (e.touches.length === 2) {
+            const dist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+            const delta = dist / state.lastDist;
+            state.scale *= delta;
+            state.lastDist = dist;
+        }
+        updateTransform();
+    });
+
+    frameLayer.addEventListener('touchend', () => {
+        isDragging = false;
+    });
+
+    function updateTransform() {
+        frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
+    }
+
+    // --- 撮影・合成 ---
+    shutter.addEventListener('click', () => {
+        const ctx = canvas.getContext('2d');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        // 1. カメラ映像を描画
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        // 2. フレームを合成 (CSSの座標系からCanvasの座標系へ変換)
+        if (frameImg.style.display !== 'none') {
+            const scaleX = canvas.width / window.innerWidth;
+            const scaleY = canvas.height / window.innerHeight;
+            
+            ctx.save();
+            ctx.translate(state.x * scaleX, state.y * scaleY);
+            ctx.scale(state.scale * scaleX, state.scale * scaleY);
+            ctx.drawImage(frameImg, 0, 0);
+            ctx.restore();
+        }
+
+        // 3. ダウンロード
+        const link = document.createElement('a');
+        link.download = `photo_${Date.now()}.png`;
+        link.href = canvas.toDataURL('image/png');
+        link.click();
+    });
+
+    window.onload = startCamera;
+</script>
+</body>
+</html>
