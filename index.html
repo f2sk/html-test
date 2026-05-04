@@ -1,51 +1,57 @@
 <!DOCTYPE html>
 <html lang="ja">
-<!-- 
-  Build Trigger: 2026-05-04-BackToBasics-TopUI
-  Fix: UI disappearing due to bottom address bar
-  Design: Top-aligned controls to ensure visibility
--->
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Web Cam Pro v2.5</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Web Cam Pro v2.7</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; height: 100vh; width: 100vw; }
         
-        /* プレビューは画面全体 */
+        /* ビデオとフレームのコンテナ */
         #viewport { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; z-index: 1; }
-        video { width: 100%; height: 100%; object-fit: contain; }
-        #frame-layer { position: absolute; top: 0; left: 0; will-change: transform; touch-action: none; z-index: 10; }
-        #frame-img { display: none; pointer-events: none; }
+        video { width: 100%; height: 100%; object-fit: contain; background: #000; }
 
-        /* UIを画面上部に配置（下部バーの影響を完全に回避） */
+        /* フレームレイヤー：初期は非表示 */
+        #frame-layer { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            will-change: transform; 
+            touch-action: none; 
+            z-index: 10; 
+            display: none;
+            transform-origin: 0 0; /* 左上を起点に制御 */
+        }
+        #frame-img { display: block; pointer-events: none; }
+
+        /* 操作UI：上部に固定 */
         .controls { 
             position: absolute; 
-            top: 10px; 
+            top: 20px; 
             left: 50%; 
             transform: translateX(-50%);
-            width: 90%;
+            width: 85%;
             max-width: 400px;
-            background: rgba(0, 0, 0, 0.7); 
+            background: rgba(0, 0, 0, 0.8); 
             padding: 15px; 
             border-radius: 16px;
             display: flex; 
             flex-direction: column; 
-            gap: 10px; 
+            gap: 12px; 
             z-index: 100; 
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
         }
 
         .button-group { display: flex; gap: 10px; }
-        .slider-group { display: none; align-items: center; gap: 10px; color: white; font-size: 10px; }
+        .slider-group { display: none; align-items: center; gap: 10px; color: white; font-size: 11px; }
         
         button, label { 
-            background: #333; color: white; border: 1px solid #555; 
-            padding: 12px; border-radius: 8px; font-size: 13px; 
+            background: #444; color: white; border: 1px solid #666; 
+            padding: 12px; border-radius: 10px; font-size: 13px; 
             cursor: pointer; flex: 1; text-align: center;
         }
-        #shutter { background: #d63031; border: none; font-weight: bold; flex: 1.5; }
+        #shutter { background: #e74c3c; border: none; font-weight: bold; flex: 1.5; }
         input[type="range"] { flex: 1; accent-color: #f1c40f; }
         input[type="file"] { display: none; }
         canvas { display: none; }
@@ -81,7 +87,7 @@
     const canvas = document.getElementById('canvas-output');
 
     let videoTrack = null;
-    let state = { x: 50, y: 150, scale: 0.5, lastX: 0, lastY: 0, lastDist: 0 };
+    let state = { x: 0, y: 0, scale: 1, lastX: 0, lastY: 0, lastDist: 0 };
 
     async function startCamera() {
         try {
@@ -100,23 +106,30 @@
         } catch (err) { alert("Camera Error: " + err); }
     }
 
-    exposureSlider.addEventListener('input', (e) => {
-        if (videoTrack) videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
-    });
-
+    // PNG読み込み：真ん中に配置
     document.getElementById('file-input').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
         const reader = new FileReader();
         reader.onload = (ev) => {
             frameImg.src = ev.target.result;
-            frameImg.style.display = 'block';
             frameImg.onload = () => {
-                state.scale = (window.innerWidth / frameImg.naturalWidth) * 0.6;
+                // 画面に収まるようにスケールを計算 (80%幅に)
+                const scale = (window.innerWidth * 0.8) / frameImg.naturalWidth;
+                state.scale = scale;
+
+                // ど真ん中に配置
+                state.x = (window.innerWidth - (frameImg.naturalWidth * state.scale)) / 2;
+                state.y = (window.innerHeight - (frameImg.naturalHeight * state.scale)) / 2;
+
+                frameLayer.style.display = 'block';
                 updateTransform();
             };
         };
-        reader.readAsDataURL(e.target.files[0]);
+        reader.readAsDataURL(file);
     });
 
+    // タッチ操作（移動・ピンチ）
     frameLayer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             state.lastX = e.touches[0].clientX - state.x;
@@ -133,30 +146,55 @@
             state.y = e.touches[0].clientY - state.lastY;
         } else if (e.touches.length === 2) {
             const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            state.scale *= (dist / state.lastDist);
+            const delta = dist / state.lastDist;
+            state.scale *= delta;
             state.lastDist = dist;
         }
         updateTransform();
     }, { passive: false });
 
     function updateTransform() {
+        // transform-origin: 0 0 なので translate だけで位置が決まる
         frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
     }
 
+    // 明度調整
+    exposureSlider.addEventListener('input', (e) => {
+        if (videoTrack) videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
+    });
+
+    // 合成保存（修正：ビデオの表示領域と実際の解像度を計算）
     document.getElementById('shutter').addEventListener('click', () => {
         const ctx = canvas.getContext('2d');
+        
+        // カメラの実際の解像度をセット
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        const rect = video.getBoundingClientRect();
-        const scaleX = canvas.width / rect.width;
-        const scaleY = canvas.height / rect.height;
+
+        // 1. まずカメラ映像を描画
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        if (frameImg.src) {
-            ctx.drawImage(frameImg, (state.x - rect.left) * scaleX, (state.y - rect.top) * scaleY, 
-                          frameImg.naturalWidth * state.scale * scaleX, frameImg.naturalHeight * state.scale * scaleY);
+
+        // 2. フレームを合成
+        if (frameImg.src && frameLayer.style.display !== 'none') {
+            const vRect = video.getBoundingClientRect();
+            
+            // 画面上のビデオ表示エリアに対するピクセル比率
+            // object-fit: contain のため、video要素のサイズと実際の映像表示位置を考慮
+            const scaleX = canvas.width / vRect.width;
+            const scaleY = canvas.height / vRect.height;
+
+            // 画面座標からCanvas座標への変換
+            const drawX = (state.x - vRect.left) * scaleX;
+            const drawY = (state.y - vRect.top) * scaleY;
+            const drawW = frameImg.naturalWidth * state.scale * scaleX;
+            const drawH = frameImg.naturalHeight * state.scale * scaleY;
+
+            ctx.drawImage(frameImg, drawX, drawY, drawW, drawH);
         }
+
+        // 3. 保存
         const link = document.createElement('a');
-        link.download = `shot-${Date.now()}.png`;
+        link.download = `photo-${Date.now()}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
     });
