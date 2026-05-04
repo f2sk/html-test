@@ -3,87 +3,90 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Web Camera Frame Tool</title>
+    <title>Web Camera Frame Tool v2</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
             background: #000;
             font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
         }
 
-        /* カメラ映像 */
-        #video-container {
+        /* プレビューエリア */
+        #viewport {
             position: relative;
+            flex-grow: 1;
             width: 100vw;
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            overflow: hidden;
+            background: #111;
         }
 
         video {
             width: 100%;
             height: 100%;
-            object-fit: cover;
+            object-fit: contain; /* 画面に収まるように表示 */
         }
 
-        /* 重ねるフレーム */
+        /* フレーム重畳レイヤー */
         #frame-layer {
             position: absolute;
             top: 0;
             left: 0;
             will-change: transform;
-            touch-action: none; /* ブラウザのデフォルト操作を無効化 */
-            pointer-events: auto;
+            touch-action: none;
             cursor: move;
+            display: inline-block;
         }
 
         #frame-img {
-            max-width: none;
             display: none;
+            pointer-events: none; /* タッチイベントは親のdivで取る */
         }
 
-        /* UIパネル */
+        /* 操作パネル */
         .controls {
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
+            background: #222;
+            padding: 20px;
             display: flex;
+            justify-content: center;
+            align-items: center;
             gap: 15px;
             z-index: 100;
         }
 
         button, label {
-            background: rgba(255, 255, 255, 0.2);
-            backdrop-filter: blur(10px);
+            background: #444;
             color: white;
-            border: 1px solid white;
-            padding: 12px 20px;
-            border-radius: 30px;
+            border: 1px solid #666;
+            padding: 12px 24px;
+            border-radius: 8px;
             font-size: 14px;
             cursor: pointer;
+            text-align: center;
         }
 
         #shutter {
-            background: #ff4757;
-            border: none;
+            background: #e74c3c;
+            border-color: #c0392b;
             font-weight: bold;
+            padding: 12px 40px;
         }
 
         input[type="file"] {
             display: none;
         }
 
-        #canvas-output {
+        canvas {
             display: none;
         }
     </style>
 </head>
 <body>
 
-<div id="video-container">
+<div id="viewport">
     <video id="video" autoplay playsinline></video>
     <div id="frame-layer">
         <img id="frame-img" src="" alt="Frame">
@@ -91,9 +94,9 @@
 </div>
 
 <div class="controls">
-    <label for="file-input">フレーム選択</label>
+    <label for="file-input">PNG選択</label>
     <input type="file" id="file-input" accept="image/png">
-    <button id="shutter">撮影</button>
+    <button id="shutter">写真を保存</button>
 </div>
 
 <canvas id="canvas-output"></canvas>
@@ -106,20 +109,23 @@
     const shutter = document.getElementById('shutter');
     const canvas = document.getElementById('canvas-output');
 
-    // --- カメラ設定 ---
+    let state = { x: 50, y: 50, scale: 0.5, lastX: 0, lastY: 0, lastDist: 0 };
+    let isDragging = false;
+
+    // 1. カメラ起動
     async function startCamera() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment' },
+                video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
                 audio: false
             });
             video.srcObject = stream;
         } catch (err) {
-            alert("カメラの起動に失敗しました: " + err);
+            alert("カメラを起動できません: " + err);
         }
     }
 
-    // --- フレーム読み込み ---
+    // 2. フレーム画像読み込み
     fileInput.addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -127,23 +133,15 @@
         reader.onload = (event) => {
             frameImg.src = event.target.result;
             frameImg.style.display = 'block';
-            // 初期位置を中央に
-            resetFramePosition();
+            frameImg.onload = () => {
+                state.scale = (window.innerWidth / frameImg.naturalWidth) * 0.8;
+                updateTransform();
+            };
         };
         reader.readAsDataURL(file);
     });
 
-    function resetFramePosition() {
-        state.x = window.innerWidth / 4;
-        state.y = window.innerHeight / 4;
-        state.scale = 0.5;
-        updateTransform();
-    }
-
-    // --- 拡大・縮小・移動のロジック ---
-    let state = { x: 0, y: 0, scale: 1, lastX: 0, lastY: 0, lastDist: 0 };
-    let isDragging = false;
-
+    // 3. タッチ操作
     frameLayer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             isDragging = true;
@@ -158,6 +156,7 @@
     });
 
     frameLayer.addEventListener('touchmove', (e) => {
+        e.preventDefault();
         if (isDragging && e.touches.length === 1) {
             state.x = e.touches[0].clientX - state.lastX;
             state.y = e.touches[0].clientY - state.lastY;
@@ -171,40 +170,47 @@
             state.lastDist = dist;
         }
         updateTransform();
-    });
+    }, { passive: false });
 
-    frameLayer.addEventListener('touchend', () => {
-        isDragging = false;
-    });
+    frameLayer.addEventListener('touchend', () => isDragging = false);
 
     function updateTransform() {
         frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
     }
 
-    // --- 撮影・合成 ---
+    // 4. 合成と保存
     shutter.addEventListener('click', () => {
+        if (!frameImg.src) {
+            alert("先にフレーム画像を選択してください");
+            return;
+        }
+
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
 
-        // 1. カメラ映像を描画
+        // ビデオの表示サイズと実際の解像度の比率を計算
+        const rect = video.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+
+        // ビデオ内の実際の表示オフセット（object-fit: containによる余白対策）
+        const offsetX = (rect.width - video.offsetWidth) / 2;
+        const offsetY = (rect.height - video.offsetHeight) / 2;
+
+        // 描画
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // 2. フレームを合成 (CSSの座標系からCanvasの座標系へ変換)
-        if (frameImg.style.display !== 'none') {
-            const scaleX = canvas.width / window.innerWidth;
-            const scaleY = canvas.height / window.innerHeight;
-            
-            ctx.save();
-            ctx.translate(state.x * scaleX, state.y * scaleY);
-            ctx.scale(state.scale * scaleX, state.scale * scaleY);
-            ctx.drawImage(frameImg, 0, 0);
-            ctx.restore();
-        }
+        const drawX = (state.x - rect.left) * scaleX;
+        const drawY = (state.y - rect.top) * scaleY;
+        const drawW = frameImg.naturalWidth * state.scale * scaleX;
+        const drawH = frameImg.naturalHeight * state.scale * scaleY;
 
-        // 3. ダウンロード
+        ctx.drawImage(frameImg, drawX, drawY, drawW, drawH);
+
+        // 保存
         const link = document.createElement('a');
-        link.download = `photo_${Date.now()}.png`;
+        link.download = `web-photo-${Date.now()}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
     });
