@@ -3,84 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Web Camera Frame Tool v2</title>
+    <title>Web Camera Tool for Pixel 10</title>
     <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-            background: #000;
-            font-family: sans-serif;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; }
+        #viewport { position: relative; flex-grow: 1; width: 100vw; overflow: hidden; background: #111; cursor: crosshair; }
+        video { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+        #frame-layer { position: absolute; top: 0; left: 0; will-change: transform; touch-action: none; cursor: move; display: inline-block; z-index: 10; }
+        #frame-img { display: none; pointer-events: none; }
+        
+        .controls { background: #222; padding: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 100; }
+        .button-group { display: flex; justify-content: center; gap: 10px; }
+        .slider-group { display: none; align-items: center; gap: 10px; color: white; font-size: 12px; }
+        
+        button, label { background: #444; color: white; border: 1px solid #666; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; }
+        #shutter { background: #e74c3c; border: none; font-weight: bold; }
+        input[type="range"] { flex-grow: 1; }
+        input[type="file"] { display: none; }
+        canvas { display: none; }
 
-        /* プレビューエリア */
-        #viewport {
-            position: relative;
-            flex-grow: 1;
-            width: 100vw;
-            overflow: hidden;
-            background: #111;
-        }
-
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: contain; /* 画面に収まるように表示 */
-        }
-
-        /* フレーム重畳レイヤー */
-        #frame-layer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            will-change: transform;
-            touch-action: none;
-            cursor: move;
-            display: inline-block;
-        }
-
-        #frame-img {
-            display: none;
-            pointer-events: none; /* タッチイベントは親のdivで取る */
-        }
-
-        /* 操作パネル */
-        .controls {
-            background: #222;
-            padding: 20px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 15px;
-            z-index: 100;
-        }
-
-        button, label {
-            background: #444;
-            color: white;
-            border: 1px solid #666;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-size: 14px;
-            cursor: pointer;
-            text-align: center;
-        }
-
-        #shutter {
-            background: #e74c3c;
-            border-color: #c0392b;
-            font-weight: bold;
-            padding: 12px 40px;
-        }
-
-        input[type="file"] {
-            display: none;
-        }
-
-        canvas {
-            display: none;
+        /* フォーカス時の視覚効果 */
+        #focus-ring {
+            position: absolute; width: 60px; height: 60px; border: 2px solid #f1c40f; border-radius: 50%;
+            transform: translate(-50%, -50%) scale(2); opacity: 0; pointer-events: none; transition: transform 0.3s, opacity 0.3s; z-index: 20;
         }
     </style>
 </head>
@@ -88,129 +32,147 @@
 
 <div id="viewport">
     <video id="video" autoplay playsinline></video>
-    <div id="frame-layer">
-        <img id="frame-img" src="" alt="Frame">
-    </div>
+    <div id="frame-layer"><img id="frame-img" src=""></div>
+    <div id="focus-ring"></div>
 </div>
 
 <div class="controls">
-    <label for="file-input">PNG選択</label>
-    <input type="file" id="file-input" accept="image/png">
-    <button id="shutter">写真を保存</button>
+    <div id="exposure-ui" class="slider-group">
+        <span>明るさ</span>
+        <input type="range" id="exposure-slider" step="0.1">
+    </div>
+    <div class="button-group">
+        <label for="file-input">PNG選択</label>
+        <input type="file" id="file-input" accept="image/png">
+        <button id="shutter">保存</button>
+    </div>
+    <div style="color: #888; font-size: 10px; text-align: center;">画面タップでピント合わせ試行</div>
 </div>
 
 <canvas id="canvas-output"></canvas>
 
 <script>
+    const viewport = document.getElementById('viewport');
     const video = document.getElementById('video');
     const frameLayer = document.getElementById('frame-layer');
     const frameImg = document.getElementById('frame-img');
-    const fileInput = document.getElementById('file-input');
-    const shutter = document.getElementById('shutter');
+    const focusRing = document.getElementById('focus-ring');
+    const exposureUI = document.getElementById('exposure-ui');
+    const exposureSlider = document.getElementById('exposure-slider');
     const canvas = document.getElementById('canvas-output');
 
+    let videoTrack = null;
     let state = { x: 50, y: 50, scale: 0.5, lastX: 0, lastY: 0, lastDist: 0 };
-    let isDragging = false;
 
-    // 1. カメラ起動
     async function startCamera() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
-                audio: false
+                video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
             });
             video.srcObject = stream;
-        } catch (err) {
-            alert("カメラを起動できません: " + err);
-        }
+            videoTrack = stream.getVideoTracks()[0];
+
+            const caps = videoTrack.getCapabilities();
+            if (caps.exposureCompensation) {
+                exposureUI.style.display = 'flex';
+                exposureSlider.min = caps.exposureCompensation.min;
+                exposureSlider.max = caps.exposureCompensation.max;
+                exposureSlider.value = 0;
+            }
+        } catch (err) { alert("Camera error: " + err); }
     }
 
-    // 2. フレーム画像読み込み
-    fileInput.addEventListener('change', (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+    // --- タップでピント合わせ (擬似トリガー) ---
+    viewport.addEventListener('click', async (e) => {
+        if (!videoTrack) return;
+
+        // フォーカスリングの表示
+        focusRing.style.left = `${e.clientX}px`;
+        focusRing.style.top = `${e.clientY}px`;
+        focusRing.style.opacity = '1';
+        focusRing.style.transform = 'translate(-50%, -50%) scale(1)';
+
+        try {
+            const caps = videoTrack.getCapabilities();
+            if (caps.focusMode && caps.focusMode.includes('continuous')) {
+                // 一度マニュアルに振ってから戻すことでAFを強制再始動
+                await videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual' }] });
+                await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
+            }
+        } catch (err) {
+            console.warn("Focus control not supported:", err);
+        }
+
+        setTimeout(() => {
+            focusRing.style.opacity = '0';
+            focusRing.style.transform = 'translate(-50%, -50%) scale(2)';
+        }, 500);
+    });
+
+    // 明度変更
+    exposureSlider.addEventListener('input', (e) => {
+        if (!videoTrack) return;
+        videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
+    });
+
+    // フレーム読み込み
+    document.getElementById('file-input').addEventListener('change', (e) => {
         const reader = new FileReader();
-        reader.onload = (event) => {
-            frameImg.src = event.target.result;
+        reader.onload = (ev) => {
+            frameImg.src = ev.target.result;
             frameImg.style.display = 'block';
             frameImg.onload = () => {
                 state.scale = (window.innerWidth / frameImg.naturalWidth) * 0.8;
                 updateTransform();
             };
         };
-        reader.readAsDataURL(file);
+        reader.readAsDataURL(e.target.files[0]);
     });
 
-    // 3. タッチ操作
+    // タッチ移動・拡大縮小
     frameLayer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
-            isDragging = true;
             state.lastX = e.touches[0].clientX - state.x;
             state.lastY = e.touches[0].clientY - state.y;
         } else if (e.touches.length === 2) {
-            state.lastDist = Math.hypot(
-                e.touches[0].clientX - e.touches[1].clientX,
-                e.touches[0].clientY - e.touches[1].clientY
-            );
+            state.lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         }
+        e.stopPropagation(); // 画面クリックイベントを防ぐ
     });
 
     frameLayer.addEventListener('touchmove', (e) => {
         e.preventDefault();
-        if (isDragging && e.touches.length === 1) {
+        if (e.touches.length === 1) {
             state.x = e.touches[0].clientX - state.lastX;
             state.y = e.touches[0].clientY - state.lastY;
         } else if (e.touches.length === 2) {
-            const dist = Math.hypot(
-                e.touches[0].clientX - e.touches[1].clientX,
-                e.touches[0].clientY - e.touches[1].clientY
-            );
-            const delta = dist / state.lastDist;
-            state.scale *= delta;
+            const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+            state.scale *= (dist / state.lastDist);
             state.lastDist = dist;
         }
         updateTransform();
     }, { passive: false });
 
-    frameLayer.addEventListener('touchend', () => isDragging = false);
-
     function updateTransform() {
         frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
     }
 
-    // 4. 合成と保存
-    shutter.addEventListener('click', () => {
-        if (!frameImg.src) {
-            alert("先にフレーム画像を選択してください");
-            return;
-        }
-
+    document.getElementById('shutter').addEventListener('click', () => {
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-
-        // ビデオの表示サイズと実際の解像度の比率を計算
         const rect = video.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
 
-        // ビデオ内の実際の表示オフセット（object-fit: containによる余白対策）
-        const offsetX = (rect.width - video.offsetWidth) / 2;
-        const offsetY = (rect.height - video.offsetHeight) / 2;
-
-        // 描画
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        if (frameImg.src) {
+            ctx.drawImage(frameImg, (state.x - rect.left) * scaleX, (state.y - rect.top) * scaleY, 
+                          frameImg.naturalWidth * state.scale * scaleX, frameImg.naturalHeight * state.scale * scaleY);
+        }
 
-        const drawX = (state.x - rect.left) * scaleX;
-        const drawY = (state.y - rect.top) * scaleY;
-        const drawW = frameImg.naturalWidth * state.scale * scaleX;
-        const drawH = frameImg.naturalHeight * state.scale * scaleY;
-
-        ctx.drawImage(frameImg, drawX, drawY, drawW, drawH);
-
-        // 保存
         const link = document.createElement('a');
-        link.download = `web-photo-${Date.now()}.png`;
+        link.download = `pixel10-photo-${Date.now()}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
     });
