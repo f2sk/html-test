@@ -1,48 +1,75 @@
 <!DOCTYPE html>
 <html lang="ja">
 <!-- 
-  Build Trigger: 2026-05-04-Final-Clean
-  Update: Removed unstable Autofocus trigger / Kept Safe Area UI
-  Device: Optimized for Pixel 10 & Chrome Bottom Tab
+  Build Trigger: 2026-05-04-Final-UI-Fix
+  Fix: Absolute forced layout for Chrome bottom address bar
 -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Web Cam Pro v2.3</title>
+    <title>Web Cam Pro v2.4</title>
     <style>
-        :root {
-            --safe-bottom: env(safe-area-inset-bottom, 20px);
-        }
-        body { margin: 0; overflow: hidden; background: #000; font-family: system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
-        
-        #viewport { position: relative; flex-grow: 1; width: 100vw; overflow: hidden; background: #111; }
-        video { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-        
-        #frame-layer { position: absolute; top: 0; left: 0; will-change: transform; touch-action: none; cursor: move; display: inline-block; z-index: 10; }
-        #frame-img { display: none; pointer-events: none; }
-        
-        .controls { 
-            background: rgba(26, 26, 26, 0.95); 
-            padding: 15px 15px calc(var(--safe-bottom) + 10px) 15px;
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #000; 
+            font-family: system-ui, sans-serif; 
             display: flex; 
             flex-direction: column; 
-            gap: 12px; 
-            z-index: 100; 
-            border-top: 1px solid #333;
-            backdrop-filter: blur(10px);
+            /* 画面の高さ100%を維持 */
+            height: 100vh;
+            height: -webkit-fill-available;
         }
 
-        .button-group { display: flex; justify-content: center; gap: 12px; }
-        .slider-group { display: none; align-items: center; gap: 10px; color: #eee; font-size: 11px; font-weight: bold; padding: 0 5px; }
+        /* プレビューエリア：操作パネルの分（160px）を引いた高さ */
+        #viewport { 
+            position: relative; 
+            flex: 1;
+            width: 100vw; 
+            overflow: hidden; 
+            background: #111; 
+        }
+
+        video { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+        #frame-layer { position: absolute; top: 0; left: 0; will-change: transform; touch-action: none; z-index: 10; }
+        #frame-img { display: none; pointer-events: none; }
+        
+        /* 操作パネル：高さを固定して、絶対に被らないようにする */
+        .controls { 
+            background: #1a1a1a; 
+            height: 160px; /* 明示的に高さを確保 */
+            min-height: 160px;
+            display: flex; 
+            flex-direction: column; 
+            justify-content: center;
+            padding: 10px 20px;
+            box-sizing: border-box;
+            z-index: 100;
+            border-top: 1px solid #333;
+        }
+
+        .slider-group { 
+            display: none; 
+            align-items: center; 
+            gap: 15px; 
+            color: #ccc; 
+            font-size: 11px; 
+            margin-bottom: 15px;
+        }
+
+        .button-group { 
+            display: flex; 
+            justify-content: space-between; 
+            gap: 15px; 
+        }
         
         button, label { 
             background: #333; color: white; border: 1px solid #555; 
-            padding: 12px 24px; border-radius: 12px; font-size: 14px; 
+            padding: 15px 0; border-radius: 12px; font-size: 14px; 
             cursor: pointer; flex: 1; text-align: center;
-            max-width: 150px;
         }
-        #shutter { background: #d63031; border: none; font-weight: bold; flex: 1.5; max-width: 200px; }
-        input[type="range"] { flex-grow: 1; accent-color: #f1c40f; height: 20px; }
+        #shutter { background: #d63031; border: none; font-weight: bold; flex: 2; }
+        input[type="range"] { flex: 1; accent-color: #f1c40f; }
         input[type="file"] { display: none; }
         canvas { display: none; }
     </style>
@@ -60,9 +87,9 @@
         <input type="range" id="exposure-slider" step="0.1">
     </div>
     <div class="button-group">
-        <label for="file-input">PNG</label>
+        <label for="file-input">PNG選択</label>
         <input type="file" id="file-input" accept="image/png">
-        <button id="shutter">SHOT</button>
+        <button id="shutter">撮影</button>
     </div>
 </div>
 
@@ -93,29 +120,26 @@
                 exposureSlider.max = caps.exposureCompensation.max;
                 exposureSlider.value = 0;
             }
-        } catch (err) { console.error("Camera error:", err); }
+        } catch (err) { console.error(err); }
     }
 
-    // 明度調整
     exposureSlider.addEventListener('input', (e) => {
         if (videoTrack) videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
     });
 
-    // ファイル読み込み
     document.getElementById('file-input').addEventListener('change', (e) => {
         const reader = new FileReader();
         reader.onload = (ev) => {
             frameImg.src = ev.target.result;
             frameImg.style.display = 'block';
             frameImg.onload = () => {
-                state.scale = (window.innerWidth / frameImg.naturalWidth) * 0.7;
+                state.scale = (window.innerWidth / frameImg.naturalWidth) * 0.6;
                 updateTransform();
             };
         };
         reader.readAsDataURL(e.target.files[0]);
     });
 
-    // タッチ操作（移動・ピンチ）
     frameLayer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             state.lastX = e.touches[0].clientX - state.x;
@@ -142,7 +166,6 @@
         frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
     }
 
-    // 合成保存
     document.getElementById('shutter').addEventListener('click', () => {
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth;
