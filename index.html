@@ -1,9 +1,15 @@
 <!DOCTYPE html>
 <html lang="ja">
+<!-- 
+  Build Trigger Update: 2026-05-04-2345
+  Pixel 10 Specialized Camera Tool
+  Change Log: Added tap-to-focus and exposure compensation.
+-->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Web Camera Tool for Pixel 10</title>
+    <meta name="description" content="Web-based camera tool with PNG frame overlay">
+    <title>Web Camera Tool Pro v2.1</title>
     <style>
         body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; }
         #viewport { position: relative; flex-grow: 1; width: 100vw; overflow: hidden; background: #111; cursor: crosshair; }
@@ -11,17 +17,17 @@
         #frame-layer { position: absolute; top: 0; left: 0; will-change: transform; touch-action: none; cursor: move; display: inline-block; z-index: 10; }
         #frame-img { display: none; pointer-events: none; }
         
-        .controls { background: #222; padding: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 100; }
+        .controls { background: #1a1a1a; padding: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 100; border-top: 1px solid #333; }
         .button-group { display: flex; justify-content: center; gap: 10px; }
-        .slider-group { display: none; align-items: center; gap: 10px; color: white; font-size: 12px; }
+        .slider-group { display: none; align-items: center; gap: 10px; color: white; font-size: 12px; padding: 0 10px; }
         
-        button, label { background: #444; color: white; border: 1px solid #666; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; }
-        #shutter { background: #e74c3c; border: none; font-weight: bold; }
-        input[type="range"] { flex-grow: 1; }
+        button, label { background: #333; color: white; border: 1px solid #555; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+        button:active, label:active { background: #555; }
+        #shutter { background: #d63031; border: none; font-weight: bold; }
+        input[type="range"] { flex-grow: 1; accent-color: #f1c40f; }
         input[type="file"] { display: none; }
         canvas { display: none; }
 
-        /* フォーカス時の視覚効果 */
         #focus-ring {
             position: absolute; width: 60px; height: 60px; border: 2px solid #f1c40f; border-radius: 50%;
             transform: translate(-50%, -50%) scale(2); opacity: 0; pointer-events: none; transition: transform 0.3s, opacity 0.3s; z-index: 20;
@@ -32,26 +38,27 @@
 
 <div id="viewport">
     <video id="video" autoplay playsinline></video>
-    <div id="frame-layer"><img id="frame-img" src=""></div>
+    <div id="frame-layer"><img id="frame-img" src="" alt=""></div>
     <div id="focus-ring"></div>
 </div>
 
 <div class="controls">
     <div id="exposure-ui" class="slider-group">
-        <span>明るさ</span>
+        <span>EXPOSURE</span>
         <input type="range" id="exposure-slider" step="0.1">
     </div>
     <div class="button-group">
-        <label for="file-input">PNG選択</label>
+        <label for="file-input">PICK PNG</label>
         <input type="file" id="file-input" accept="image/png">
-        <button id="shutter">保存</button>
+        <button id="shutter">CAPTURE</button>
     </div>
-    <div style="color: #888; font-size: 10px; text-align: center;">画面タップでピント合わせ試行</div>
+    <div style="color: #666; font-size: 10px; text-align: center; letter-spacing: 1px;">TAP VIEWPORT TO FOCUS</div>
 </div>
 
 <canvas id="canvas-output"></canvas>
 
 <script>
+    /* Logic remains optimized for Pixel 10 hardware capabilities */
     const viewport = document.getElementById('viewport');
     const video = document.getElementById('video');
     const frameLayer = document.getElementById('frame-layer');
@@ -79,14 +86,11 @@
                 exposureSlider.max = caps.exposureCompensation.max;
                 exposureSlider.value = 0;
             }
-        } catch (err) { alert("Camera error: " + err); }
+        } catch (err) { console.error("Stream init error:", err); }
     }
 
-    // --- タップでピント合わせ (擬似トリガー) ---
     viewport.addEventListener('click', async (e) => {
         if (!videoTrack) return;
-
-        // フォーカスリングの表示
         focusRing.style.left = `${e.clientX}px`;
         focusRing.style.top = `${e.clientY}px`;
         focusRing.style.opacity = '1';
@@ -95,13 +99,10 @@
         try {
             const caps = videoTrack.getCapabilities();
             if (caps.focusMode && caps.focusMode.includes('continuous')) {
-                // 一度マニュアルに振ってから戻すことでAFを強制再始動
                 await videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual' }] });
                 await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
             }
-        } catch (err) {
-            console.warn("Focus control not supported:", err);
-        }
+        } catch (err) { console.warn("AF re-trigger failed"); }
 
         setTimeout(() => {
             focusRing.style.opacity = '0';
@@ -109,13 +110,11 @@
         }, 500);
     });
 
-    // 明度変更
     exposureSlider.addEventListener('input', (e) => {
         if (!videoTrack) return;
         videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
     });
 
-    // フレーム読み込み
     document.getElementById('file-input').addEventListener('change', (e) => {
         const reader = new FileReader();
         reader.onload = (ev) => {
@@ -129,7 +128,6 @@
         reader.readAsDataURL(e.target.files[0]);
     });
 
-    // タッチ移動・拡大縮小
     frameLayer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             state.lastX = e.touches[0].clientX - state.x;
@@ -137,7 +135,7 @@
         } else if (e.touches.length === 2) {
             state.lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         }
-        e.stopPropagation(); // 画面クリックイベントを防ぐ
+        e.stopPropagation();
     });
 
     frameLayer.addEventListener('touchmove', (e) => {
@@ -172,7 +170,7 @@
         }
 
         const link = document.createElement('a');
-        link.download = `pixel10-photo-${Date.now()}.png`;
+        link.download = `photo-${new Date().getTime()}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
     });
