@@ -1,69 +1,77 @@
 <!DOCTYPE html>
 <html lang="ja">
 <!-- 
-  Build Trigger Update: 2026-05-04-2345
-  Pixel 10 Specialized Camera Tool
-  Change Log: Added tap-to-focus and exposure compensation.
+  Build Trigger: 2026-05-04-Final-Clean
+  Update: Removed unstable Autofocus trigger / Kept Safe Area UI
+  Device: Optimized for Pixel 10 & Chrome Bottom Tab
 -->
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <meta name="description" content="Web-based camera tool with PNG frame overlay">
-    <title>Web Camera Tool Pro v2.1</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Web Cam Pro v2.3</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; display: flex; flex-direction: column; height: 100vh; }
-        #viewport { position: relative; flex-grow: 1; width: 100vw; overflow: hidden; background: #111; cursor: crosshair; }
+        :root {
+            --safe-bottom: env(safe-area-inset-bottom, 20px);
+        }
+        body { margin: 0; overflow: hidden; background: #000; font-family: system-ui, sans-serif; display: flex; flex-direction: column; height: 100vh; }
+        
+        #viewport { position: relative; flex-grow: 1; width: 100vw; overflow: hidden; background: #111; }
         video { width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+        
         #frame-layer { position: absolute; top: 0; left: 0; will-change: transform; touch-action: none; cursor: move; display: inline-block; z-index: 10; }
         #frame-img { display: none; pointer-events: none; }
         
-        .controls { background: #1a1a1a; padding: 15px; display: flex; flex-direction: column; gap: 10px; z-index: 100; border-top: 1px solid #333; }
-        .button-group { display: flex; justify-content: center; gap: 10px; }
-        .slider-group { display: none; align-items: center; gap: 10px; color: white; font-size: 12px; padding: 0 10px; }
+        .controls { 
+            background: rgba(26, 26, 26, 0.95); 
+            padding: 15px 15px calc(var(--safe-bottom) + 10px) 15px;
+            display: flex; 
+            flex-direction: column; 
+            gap: 12px; 
+            z-index: 100; 
+            border-top: 1px solid #333;
+            backdrop-filter: blur(10px);
+        }
+
+        .button-group { display: flex; justify-content: center; gap: 12px; }
+        .slider-group { display: none; align-items: center; gap: 10px; color: #eee; font-size: 11px; font-weight: bold; padding: 0 5px; }
         
-        button, label { background: #333; color: white; border: 1px solid #555; padding: 10px 20px; border-radius: 8px; font-size: 14px; cursor: pointer; transition: background 0.2s; }
-        button:active, label:active { background: #555; }
-        #shutter { background: #d63031; border: none; font-weight: bold; }
-        input[type="range"] { flex-grow: 1; accent-color: #f1c40f; }
+        button, label { 
+            background: #333; color: white; border: 1px solid #555; 
+            padding: 12px 24px; border-radius: 12px; font-size: 14px; 
+            cursor: pointer; flex: 1; text-align: center;
+            max-width: 150px;
+        }
+        #shutter { background: #d63031; border: none; font-weight: bold; flex: 1.5; max-width: 200px; }
+        input[type="range"] { flex-grow: 1; accent-color: #f1c40f; height: 20px; }
         input[type="file"] { display: none; }
         canvas { display: none; }
-
-        #focus-ring {
-            position: absolute; width: 60px; height: 60px; border: 2px solid #f1c40f; border-radius: 50%;
-            transform: translate(-50%, -50%) scale(2); opacity: 0; pointer-events: none; transition: transform 0.3s, opacity 0.3s; z-index: 20;
-        }
     </style>
 </head>
 <body>
 
 <div id="viewport">
     <video id="video" autoplay playsinline></video>
-    <div id="frame-layer"><img id="frame-img" src="" alt=""></div>
-    <div id="focus-ring"></div>
+    <div id="frame-layer"><img id="frame-img" src=""></div>
 </div>
 
 <div class="controls">
     <div id="exposure-ui" class="slider-group">
-        <span>EXPOSURE</span>
+        <span>BRIGHTNESS</span>
         <input type="range" id="exposure-slider" step="0.1">
     </div>
     <div class="button-group">
-        <label for="file-input">PICK PNG</label>
+        <label for="file-input">PNG</label>
         <input type="file" id="file-input" accept="image/png">
-        <button id="shutter">CAPTURE</button>
+        <button id="shutter">SHOT</button>
     </div>
-    <div style="color: #666; font-size: 10px; text-align: center; letter-spacing: 1px;">TAP VIEWPORT TO FOCUS</div>
 </div>
 
 <canvas id="canvas-output"></canvas>
 
 <script>
-    /* Logic remains optimized for Pixel 10 hardware capabilities */
-    const viewport = document.getElementById('viewport');
     const video = document.getElementById('video');
     const frameLayer = document.getElementById('frame-layer');
     const frameImg = document.getElementById('frame-img');
-    const focusRing = document.getElementById('focus-ring');
     const exposureUI = document.getElementById('exposure-ui');
     const exposureSlider = document.getElementById('exposure-slider');
     const canvas = document.getElementById('canvas-output');
@@ -78,7 +86,6 @@
             });
             video.srcObject = stream;
             videoTrack = stream.getVideoTracks()[0];
-
             const caps = videoTrack.getCapabilities();
             if (caps.exposureCompensation) {
                 exposureUI.style.display = 'flex';
@@ -86,48 +93,29 @@
                 exposureSlider.max = caps.exposureCompensation.max;
                 exposureSlider.value = 0;
             }
-        } catch (err) { console.error("Stream init error:", err); }
+        } catch (err) { console.error("Camera error:", err); }
     }
 
-    viewport.addEventListener('click', async (e) => {
-        if (!videoTrack) return;
-        focusRing.style.left = `${e.clientX}px`;
-        focusRing.style.top = `${e.clientY}px`;
-        focusRing.style.opacity = '1';
-        focusRing.style.transform = 'translate(-50%, -50%) scale(1)';
-
-        try {
-            const caps = videoTrack.getCapabilities();
-            if (caps.focusMode && caps.focusMode.includes('continuous')) {
-                await videoTrack.applyConstraints({ advanced: [{ focusMode: 'manual' }] });
-                await videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] });
-            }
-        } catch (err) { console.warn("AF re-trigger failed"); }
-
-        setTimeout(() => {
-            focusRing.style.opacity = '0';
-            focusRing.style.transform = 'translate(-50%, -50%) scale(2)';
-        }, 500);
-    });
-
+    // 明度調整
     exposureSlider.addEventListener('input', (e) => {
-        if (!videoTrack) return;
-        videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
+        if (videoTrack) videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
     });
 
+    // ファイル読み込み
     document.getElementById('file-input').addEventListener('change', (e) => {
         const reader = new FileReader();
         reader.onload = (ev) => {
             frameImg.src = ev.target.result;
             frameImg.style.display = 'block';
             frameImg.onload = () => {
-                state.scale = (window.innerWidth / frameImg.naturalWidth) * 0.8;
+                state.scale = (window.innerWidth / frameImg.naturalWidth) * 0.7;
                 updateTransform();
             };
         };
         reader.readAsDataURL(e.target.files[0]);
     });
 
+    // タッチ操作（移動・ピンチ）
     frameLayer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             state.lastX = e.touches[0].clientX - state.x;
@@ -135,7 +123,6 @@
         } else if (e.touches.length === 2) {
             state.lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         }
-        e.stopPropagation();
     });
 
     frameLayer.addEventListener('touchmove', (e) => {
@@ -155,6 +142,7 @@
         frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
     }
 
+    // 合成保存
     document.getElementById('shutter').addEventListener('click', () => {
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth;
@@ -162,15 +150,13 @@
         const rect = video.getBoundingClientRect();
         const scaleX = canvas.width / rect.width;
         const scaleY = canvas.height / rect.height;
-
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         if (frameImg.src) {
             ctx.drawImage(frameImg, (state.x - rect.left) * scaleX, (state.y - rect.top) * scaleY, 
                           frameImg.naturalWidth * state.scale * scaleX, frameImg.naturalHeight * state.scale * scaleY);
         }
-
         const link = document.createElement('a');
-        link.download = `photo-${new Date().getTime()}.png`;
+        link.download = `shot-${Date.now()}.png`;
         link.href = canvas.toDataURL('image/png');
         link.click();
     });
