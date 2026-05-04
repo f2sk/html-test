@@ -3,55 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Web Cam Pro v2.7</title>
+    <title>Web Cam Tool Final</title>
     <style>
-        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; height: 100vh; width: 100vw; }
+        :root {
+            /* 下部バー対策: env()が取れない場合も考慮しつつ十分な余白を確保 */
+            --safe-bottom: env(safe-area-inset-bottom, 24px);
+        }
+        body { 
+            margin: 0; overflow: hidden; background: #000; 
+            font-family: system-ui, sans-serif; 
+            height: 100vh; width: 100vw;
+            display: flex; flex-direction: column;
+        }
         
-        /* ビデオとフレームのコンテナ */
-        #viewport { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; z-index: 1; }
-        video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+        /* プレビューエリア */
+        #viewport { 
+            position: relative; 
+            flex-grow: 1; 
+            width: 100%; 
+            background: #111; 
+            overflow: hidden; 
+        }
+        video { width: 100%; height: 100%; object-fit: contain; }
 
-        /* フレームレイヤー：初期は非表示 */
+        /* フレーム：z-indexを明示 */
         #frame-layer { 
             position: absolute; 
-            top: 0; 
-            left: 0; 
+            top: 0; left: 0; 
             will-change: transform; 
             touch-action: none; 
             z-index: 10; 
             display: none;
-            transform-origin: 0 0; /* 左上を起点に制御 */
+            transform-origin: 0 0;
         }
         #frame-img { display: block; pointer-events: none; }
 
-        /* 操作UI：上部に固定 */
+        /* 操作パネル：最下部に固定 */
         .controls { 
-            position: absolute; 
-            top: 20px; 
-            left: 50%; 
-            transform: translateX(-50%);
-            width: 85%;
-            max-width: 400px;
-            background: rgba(0, 0, 0, 0.8); 
-            padding: 15px; 
-            border-radius: 16px;
-            display: flex; 
-            flex-direction: column; 
-            gap: 12px; 
-            z-index: 100; 
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(20, 20, 20, 0.9); 
+            padding: 15px 20px calc(var(--safe-bottom) + 15px); 
+            z-index: 100;
+            border-top: 1px solid #333;
+            backdrop-filter: blur(15px);
         }
 
-        .button-group { display: flex; gap: 10px; }
-        .slider-group { display: none; align-items: center; gap: 10px; color: white; font-size: 11px; }
+        .slider-group { 
+            display: none; align-items: center; gap: 15px; 
+            color: #ccc; font-size: 11px; margin-bottom: 15px; 
+        }
+        .button-group { display: flex; gap: 12px; }
         
         button, label { 
-            background: #444; color: white; border: 1px solid #666; 
-            padding: 12px; border-radius: 10px; font-size: 13px; 
-            cursor: pointer; flex: 1; text-align: center;
+            background: #333; color: white; border: 1px solid #555; 
+            padding: 15px; border-radius: 14px; font-size: 14px; 
+            cursor: pointer; flex: 1; text-align: center; font-weight: 500;
         }
-        #shutter { background: #e74c3c; border: none; font-weight: bold; flex: 1.5; }
+        #shutter { background: #e74c3c; border: none; flex: 1.5; }
         input[type="range"] { flex: 1; accent-color: #f1c40f; }
         input[type="file"] { display: none; }
         canvas { display: none; }
@@ -72,7 +79,7 @@
     <div class="button-group">
         <label for="file-input">PNG選択</label>
         <input type="file" id="file-input" accept="image/png">
-        <button id="shutter">撮影</button>
+        <button id="shutter">撮影(JPEG)</button>
     </div>
 </div>
 
@@ -85,6 +92,7 @@
     const exposureUI = document.getElementById('exposure-ui');
     const exposureSlider = document.getElementById('exposure-slider');
     const canvas = document.getElementById('canvas-output');
+    const viewport = document.getElementById('viewport');
 
     let videoTrack = null;
     let state = { x: 0, y: 0, scale: 1, lastX: 0, lastY: 0, lastDist: 0 };
@@ -96,6 +104,7 @@
             });
             video.srcObject = stream;
             videoTrack = stream.getVideoTracks()[0];
+            
             const caps = videoTrack.getCapabilities();
             if (caps.exposureCompensation) {
                 exposureUI.style.display = 'flex';
@@ -106,7 +115,7 @@
         } catch (err) { alert("Camera Error: " + err); }
     }
 
-    // PNG読み込み：真ん中に配置
+    // 1. PNG読み込み & 中央初期化
     document.getElementById('file-input').addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -114,13 +123,15 @@
         reader.onload = (ev) => {
             frameImg.src = ev.target.result;
             frameImg.onload = () => {
-                // 画面に収まるようにスケールを計算 (80%幅に)
-                const scale = (window.innerWidth * 0.8) / frameImg.naturalWidth;
-                state.scale = scale;
-
-                // ど真ん中に配置
-                state.x = (window.innerWidth - (frameImg.naturalWidth * state.scale)) / 2;
-                state.y = (window.innerHeight - (frameImg.naturalHeight * state.scale)) / 2;
+                const viewW = viewport.clientWidth;
+                const viewH = viewport.clientHeight;
+                
+                // 初期スケール：画面の60%幅に収める
+                state.scale = (viewW * 0.6) / frameImg.naturalWidth;
+                
+                // 初期位置：プレビューエリアの真ん中
+                state.x = (viewW - (frameImg.naturalWidth * state.scale)) / 2;
+                state.y = (viewH - (frameImg.naturalHeight * state.scale)) / 2;
 
                 frameLayer.style.display = 'block';
                 updateTransform();
@@ -129,7 +140,7 @@
         reader.readAsDataURL(file);
     });
 
-    // タッチ操作（移動・ピンチ）
+    // 2. 操作
     frameLayer.addEventListener('touchstart', (e) => {
         if (e.touches.length === 1) {
             state.lastX = e.touches[0].clientX - state.x;
@@ -146,56 +157,64 @@
             state.y = e.touches[0].clientY - state.lastY;
         } else if (e.touches.length === 2) {
             const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            const delta = dist / state.lastDist;
-            state.scale *= delta;
+            state.scale *= (dist / state.lastDist);
             state.lastDist = dist;
         }
         updateTransform();
     }, { passive: false });
 
     function updateTransform() {
-        // transform-origin: 0 0 なので translate だけで位置が決まる
         frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
     }
 
-    // 明度調整
     exposureSlider.addEventListener('input', (e) => {
         if (videoTrack) videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
     });
 
-    // 合成保存（修正：ビデオの表示領域と実際の解像度を計算）
+    // 3. 撮影 & 合成 (JPEG)
     document.getElementById('shutter').addEventListener('click', () => {
         const ctx = canvas.getContext('2d');
-        
-        // カメラの実際の解像度をセット
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
 
-        // 1. まずカメラ映像を描画
+        // ビデオの実際の表示サイズと位置（object-fit: containを考慮）
+        const vW = video.offsetWidth;
+        const vH = video.offsetHeight;
+        const rect = video.getBoundingClientRect();
+        
+        // 映像が実際に描画されている範囲を特定
+        const videoRatio = canvas.width / canvas.height;
+        const elementRatio = vW / vH;
+        let realW, realH, realX, realY;
+
+        if (elementRatio > videoRatio) {
+            realH = vH;
+            realW = vH * videoRatio;
+        } else {
+            realW = vW;
+            realH = vW / videoRatio;
+        }
+        realX = rect.left + (vW - realW) / 2;
+        realY = rect.top + (vH - realH) / 2;
+
+        // 合成用スケール
+        const s = canvas.width / realW;
+
+        // 描画開始
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // 2. フレームを合成
         if (frameImg.src && frameLayer.style.display !== 'none') {
-            const vRect = video.getBoundingClientRect();
-            
-            // 画面上のビデオ表示エリアに対するピクセル比率
-            // object-fit: contain のため、video要素のサイズと実際の映像表示位置を考慮
-            const scaleX = canvas.width / vRect.width;
-            const scaleY = canvas.height / vRect.height;
-
-            // 画面座標からCanvas座標への変換
-            const drawX = (state.x - vRect.left) * scaleX;
-            const drawY = (state.y - vRect.top) * scaleY;
-            const drawW = frameImg.naturalWidth * state.scale * scaleX;
-            const drawH = frameImg.naturalHeight * state.scale * scaleY;
-
+            const drawX = (state.x - realX) * s;
+            const drawY = (state.y - realY) * s;
+            const drawW = (frameImg.naturalWidth * state.scale) * s;
+            const drawH = (frameImg.naturalHeight * state.scale) * s;
             ctx.drawImage(frameImg, drawX, drawY, drawW, drawH);
         }
 
-        // 3. 保存
+        // JPEGとして保存 (品質 0.9)
         const link = document.createElement('a');
-        link.download = `photo-${Date.now()}.png`;
-        link.href = canvas.toDataURL('image/png');
+        link.download = `photo-${Date.now()}.jpg`;
+        link.href = canvas.toDataURL('image/jpeg', 0.9);
         link.click();
     });
 
