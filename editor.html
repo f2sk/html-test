@@ -3,44 +3,66 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Robust Canvas Editor</title>
+    <title>Fixed Rectangle Editor</title>
     <style>
         :root { --primary: #007bff; --success: #28a745; --bg: #1a1a1a; }
-        body { font-family: sans-serif; background: var(--bg); color: #fff; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        body { font-family: sans-serif; text-align: center; background: var(--bg); color: #fff; margin: 0; padding: 10px; touch-action: none; overflow: hidden; }
         
-        .ui-panel { padding: 10px; background: #333; z-index: 10; flex-shrink: 0; }
+        /* UIを以前の大きなボタン形式に復元 */
         .big-btn { 
-            display: block; width: 100%; max-width: 400px; margin: 5px auto;
-            padding: 12px; font-size: 15px; font-weight: bold; color: white;
-            background: var(--primary); border: none; border-radius: 8px; text-align: center;
+            display: block; width: 100%; max-width: 500px; margin: 0 auto 10px;
+            padding: 15px 0; font-size: 16px; font-weight: bold; color: white;
+            background: var(--primary); border: none; border-radius: 10px; cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
         }
-        .save-btn { background: var(--success); }
-        .controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 5px; }
-        .tool-btn { padding: 8px 12px; border: none; border-radius: 5px; background: #555; color: white; font-size: 12px; }
-        .active { background: var(--primary) !important; }
+        .save-btn { background: var(--success); margin-top: 10px; }
+        input[type="file"] { display: none; }
 
-        .editor-container { flex-grow: 1; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #000; }
-        canvas { max-width: 100%; max-height: 100%; touch-action: none; background: #222; }
+        .controls { background: #333; padding: 15px; border-radius: 12px; max-width: 500px; margin: 0 auto 10px; display: flex; flex-direction: column; gap: 10px; }
+        .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+        input[type="range"] { flex-grow: 1; height: 30px; accent-color: var(--primary); }
+        
+        .btn-group { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+        button.tool { padding: 10px 2px; border: none; border-radius: 6px; background: #555; color: white; font-size: 11px; font-weight: bold; }
+        button.active { background: var(--primary); }
+
+        .canvas-area { position: relative; display: inline-block; margin-top: 5px; line-height: 0; background: #333; border-radius: 4px; overflow: hidden; }
+        canvas { max-width: 100%; height: auto; display: block; touch-action: none; }
+        
     </style>
 </head>
 <body>
 
-    <div class="ui-panel">
-        <label class="big-btn">画像を選択<input type="file" id="upload" accept="image/*" style="display:none"></label>
-        <div class="controls">
-            <select id="color-mode" style="background:#444; color:#fff; border:none; padding:5px;">
-                <option value="green">緑除去</option><option value="blue">青除去</option>
+    <!-- 大きなファイル選択ボタン -->
+    <label class="big-btn">
+        画像を選択する
+        <input type="file" id="upload" accept="image/*">
+    </label>
+
+    <div class="controls">
+        <div class="row">
+            <select id="color-mode" style="background:#444; color:#fff; border:none; padding:8px; border-radius:4px;">
+                <option value="green">緑除去</option>
+                <option value="blue">青除去</option>
             </select>
             <input type="range" id="threshold" min="0" max="200" value="50">
-            <button class="tool-btn" onclick="addRotate(-90)">-90°</button>
-            <button class="tool-btn" onclick="addRotate(90)">+90°</button>
-            <button class="tool-btn" id="crop-toggle" onclick="toggleCrop()">切抜枠</button>
-            <button class="tool-btn" id="exec-crop" style="display:none; background:var(--primary)" onclick="executeCrop()">実行</button>
         </div>
-        <button class="big-btn save-btn" onclick="saveImage()">透過PNG保存</button>
+        <div class="row">
+            <label>微回転</label>
+            <input type="range" id="fine-rotate" min="-180" max="180" value="0">
+            <span id="angle-val" style="width:35px">0°</span>
+        </div>
+        <div class="btn-group">
+            <!-- 0度基準の固定90度ステップ回転ボタン -->
+            <button class="tool" onclick="setFixedRotate(-90)">-90°</button>
+            <button class="tool" onclick="setFixedRotate(90)">+90°</button>
+            <button class="tool" id="crop-mode-btn" onclick="toggleCropMode()">枠を表示</button>
+            <button class="tool" id="exec-crop-btn" style="display:none; background: var(--primary);" onclick="executeCrop()">切抜実行</button>
+        </div>
+        <button class="big-btn save-btn" onclick="saveImage()">透過PNGとして保存</button>
     </div>
 
-    <div class="editor-container">
+    <div class="canvas-area">
         <canvas id="canvas"></canvas>
     </div>
 
@@ -48,41 +70,89 @@
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         
-        let img = new Image();
-        let rotation = 0;
+        let rawImg = new Image();
+        let baseFixedRotation = 0; // 0, 90, 180, 270 のいずれか
         let isCropMode = false;
         
-        // 切り抜き枠（Canvas上の座標）
-        let crop = { x: 50, y: 50, w: 200, h: 200 };
-        const HANDLE_RADIUS = 25; // タッチしやすいよう半径を大きく（描画は小さく）
-        let dragTarget = null; // 'tl', 'tr', 'bl', 'br', 'move'
+        // 切り抜き枠の状態（Canvas内部座標系）。長方形を維持。
+        let cropRect = { x: 50, y: 50, w: 200, h: 200 };
+        
+        // 当たり判定・描画設定
+        const HANDLE_TARGET_RADIUS = 30; // タッチ当たり判定（大きく）
+        const HANDLE_DRAW_RADIUS = 8; // 描画半径
+
+        // ドラッグ状態
+        let activeHandle = null; // 'tl', 'tr', 'br', 'bl' のいずれか。nullならドラッグなし。
         let lastTouch = { x: 0, y: 0 };
 
         document.getElementById('upload').onchange = (e) => {
+            const file = e.target.files[0];
+            if(!file) return;
             const reader = new FileReader();
-            reader.onload = (f) => { img.onload = () => { rotation = 0; resetCrop(); render(); }; img.src = f.target.result; };
-            reader.readAsDataURL(e.target.files[0]);
+            reader.onload = (f) => {
+                rawImg.onload = () => {
+                    baseFixedRotation = 0;
+                    document.getElementById('fine-rotate').value = 0;
+                    document.getElementById('angle-val').textContent = "0°";
+                    render(); // 隅のリセットはrender内で行われる
+                    resetCropRect(); // 画像サイズに合わせて枠を初期化
+                    render(); // 枠を描画するために再読み込み
+                };
+                rawImg.src = f.target.result;
+            };
+            reader.readAsDataURL(file);
         };
 
-        function resetCrop() {
-            const margin = canvas.width * 0.1;
-            crop = { x: margin, y: margin, w: canvas.width * 0.8, h: canvas.height * 0.8 };
+        // 画像サイズに合わせて枠を中央に配置
+        function resetCropRect() {
+            if (!rawImg.src) return;
+            const margin = Math.min(canvas.width, canvas.height) * 0.1;
+            cropRect = {
+                x: margin,
+                y: margin,
+                w: canvas.width - margin * 2,
+                h: canvas.height - margin * 2
+            };
         }
 
-        function addRotate(deg) { rotation = (rotation + deg) % 360; render(); }
+        // 0度基準の固定90度ステップ回転
+        function setFixedRotate(deg) {
+            // 微回転を0にする
+            document.getElementById('fine-rotate').value = 0;
+            document.getElementById('angle-val').textContent = "0°";
+
+            // 90度単位で回す
+            baseFixedRotation = (baseFixedRotation + deg) % 360;
+            if (baseFixedRotation < 0) baseFixedRotation += 360;
+
+            render();
+            resetCropRect(); // 回転後のキャンバスサイズに合わせて枠をリセット
+            render();
+        }
+
+        document.getElementById('fine-rotate').oninput = (e) => {
+            document.getElementById('angle-val').textContent = e.target.value + "°";
+            render();
+        };
+
         document.getElementById('threshold').oninput = render;
+        document.getElementById('color-mode').onchange = render;
 
         function render() {
-            if (!img.src) return;
-            const rad = rotation * Math.PI / 180;
-            const s = Math.abs(Math.sin(rad)), c = Math.abs(Math.cos(rad));
-            canvas.width = img.width * c + img.height * s;
-            canvas.height = img.width * s + img.height * c;
+            if (!rawImg.src) return;
+            const fineDeg = parseInt(document.getElementById('fine-rotate').value);
+            const totalDeg = baseFixedRotation + fineDeg;
+            const totalRad = totalDeg * Math.PI / 180;
+
+            const absCos = Math.abs(Math.cos(totalRad));
+            const absSin = Math.abs(Math.sin(totalRad));
+            canvas.width = rawImg.width * absCos + rawImg.height * absSin;
+            canvas.height = rawImg.width * absSin + rawImg.height * absCos;
 
             ctx.save();
-            ctx.translate(canvas.width/2, canvas.height/2);
-            ctx.rotate(rad);
-            ctx.drawImage(img, -img.width/2, -img.height/2);
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate(totalRad);
+            ctx.drawImage(rawImg, -rawImg.width / 2, -rawImg.height / 2);
             ctx.restore();
 
             applyChromaKey();
@@ -90,48 +160,70 @@
         }
 
         function applyChromaKey() {
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const data = imageData.data;
-            const t = document.getElementById('threshold').value;
-            const isGreen = document.getElementById('color-mode').value === 'green';
+            const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imgData.data;
+            const t = parseInt(document.getElementById('threshold').value);
+            const mode = document.getElementById('color-mode').value;
 
             for (let i = 0; i < data.length; i += 4) {
                 const r = data[i], g = data[i+1], b = data[i+2];
-                const diff = isGreen ? g - (r + b) / 2 : b - (r + g) / 2;
-                if (diff > t) data[i+3] = 0;
+                let diff = (mode === 'green') ? (g - (r + b) / 2) : (b - (r + g) / 2);
+                if (diff > t) data[i + 3] = 0;
             }
-            ctx.putImageData(imageData, 0, 0);
+            ctx.putImageData(imgData, 0, 0);
         }
 
+        // 切り抜きUIの描画（Canvas上に直接描画）
         function drawCropUI() {
-            // 暗転
-            ctx.fillStyle = "rgba(0,0,0,0.5)";
-            ctx.fillRect(0,0,canvas.width, crop.y); // 上
-            ctx.fillRect(0, crop.y + crop.h, canvas.width, canvas.height - (crop.y + crop.h)); // 下
-            ctx.fillRect(0, crop.y, crop.x, crop.h); // 左
-            ctx.fillRect(crop.x + crop.w, crop.y, canvas.width - (crop.x + crop.w), crop.h); // 右
+            // 長方形の外側を暗く
+            ctx.fillStyle = "rgba(0,0,0,0.6)";
+            // 上
+            ctx.fillRect(0, 0, canvas.width, cropRect.y);
+            // 下
+            ctx.fillRect(0, cropRect.y + cropRect.h, canvas.width, canvas.height - (cropRect.y + cropRect.h));
+            // 左
+            ctx.fillRect(0, cropRect.y, cropRect.x, cropRect.h);
+            // 右
+            ctx.fillRect(cropRect.x + cropRect.w, cropRect.y, canvas.width - (cropRect.x + cropRect.w), cropRect.h);
 
-            // 枠線
+            // 枠線を描画
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = "#fff";
+            ctx.strokeRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
+
+            // 四隅のハンドル（円）を描画
+            const handles = getHandlePositions();
+            ctx.fillStyle = varColor('--primary');
             ctx.strokeStyle = "#fff";
             ctx.lineWidth = 2;
-            ctx.strokeRect(crop.x, crop.y, crop.w, crop.h);
-
-            // 四隅のハンドル
-            const corners = [
-                {x: crop.x, y: crop.y}, // tl
-                {x: crop.x + crop.w, y: crop.y}, // tr
-                {x: crop.x, y: crop.y + crop.h}, // bl
-                {x: crop.x + crop.w, y: crop.y + crop.h} // br
-            ];
-            ctx.fillStyle = "#fff";
-            corners.forEach(c => {
+            handles.forEach(h => {
                 ctx.beginPath();
-                ctx.arc(c.x, c.y, 8, 0, Math.PI*2); // 見た目は小さく
+                ctx.arc(h.x, h.y, HANDLE_DRAW_RADIUS, 0, Math.PI * 2);
                 ctx.fill();
+                ctx.stroke();
             });
         }
 
-        // --- 座標検知ロジック ---
+        function getHandlePositions() {
+            return [
+                { x: cropRect.x, y: cropRect.y, id: 'tl' }, // Top-Left
+                { x: cropRect.x + cropRect.w, y: cropRect.y, id: 'tr' }, // Top-Right
+                { x: cropRect.x + cropRect.w, y: cropRect.y + cropRect.h, id: 'br' }, // Bottom-Right
+                { x: cropRect.x, y: cropRect.y + cropRect.h, id: 'bl' } // Bottom-Left
+            ];
+        }
+
+        function varColor(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+        function toggleCropMode() {
+            isCropMode = !isCropMode;
+            document.getElementById('exec-crop-btn').style.display = isCropMode ? 'inline-block' : 'none';
+            document.getElementById('crop-mode-btn').classList.toggle('active');
+            if (isCropMode) resetCropRect();
+            render();
+        }
+
+        // --- タッチ/マウスイベント処理（座標計算ベース） ---
         function getCanvasPos(e) {
             const rect = canvas.getBoundingClientRect();
             const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -145,65 +237,105 @@
         function onStart(e) {
             if (!isCropMode) return;
             const pos = getCanvasPos(e);
-            lastTouch = pos;
+            activeHandle = null;
 
-            const dist = (x1, y1, x2, y2) => Math.sqrt((x1-x2)**2 + (y1-y2)**2);
+            // 四隅のハンドルとの距離を計算
+            const handles = getHandlePositions();
+            for (let i = 0; i < handles.length; i++) {
+                const dist = Math.sqrt((pos.x - handles[i].x)**2 + (pos.y - handles[i].y)**2);
+                if (dist < HANDLE_TARGET_RADIUS) {
+                    activeHandle = handles[i].id;
+                    break; // 最初に見つかったハンドルを優先
+                }
+            }
 
-            if (dist(pos.x, pos.y, crop.x, crop.y) < HANDLE_RADIUS) dragTarget = 'tl';
-            else if (dist(pos.x, pos.y, crop.x + crop.w, crop.y) < HANDLE_RADIUS) dragTarget = 'tr';
-            else if (dist(pos.x, pos.y, crop.x, crop.y + crop.h) < HANDLE_RADIUS) dragTarget = 'bl';
-            else if (dist(pos.x, pos.y, crop.x + crop.w, crop.y + crop.h) < HANDLE_RADIUS) dragTarget = 'br';
-            else if (pos.x > crop.x && pos.x < crop.x + crop.w && pos.y > crop.y && pos.y < crop.y + crop.h) dragTarget = 'move';
-            
-            if (dragTarget) e.preventDefault();
+            // 隅を掴んだ場合のみドラッグを開始（枠自体の移動は廃止）
+            if (activeHandle) {
+                e.preventDefault(); // ブラウザのスクロール等を防止
+                lastTouch = pos;
+            }
         }
 
         function onMove(e) {
-            if (!dragTarget) return;
+            if (!isCropMode || !activeHandle) return;
             e.preventDefault();
             const pos = getCanvasPos(e);
             const dx = pos.x - lastTouch.x;
             const dy = pos.y - lastTouch.y;
 
-            if (dragTarget === 'tl') { crop.x += dx; crop.y += dy; crop.w -= dx; crop.h -= dy; }
-            else if (dragTarget === 'tr') { crop.y += dy; crop.w += dx; crop.h -= dy; }
-            else if (dragTarget === 'bl') { crop.x += dx; crop.w -= dx; crop.h += dy; }
-            else if (dragTarget === 'br') { crop.w += dx; crop.h += dy; }
-            else if (dragTarget === 'move') { crop.x += dx; crop.y += dy; }
+            // 長方形を維持したリサイズロジック。掴んだ隅と対角の隅を固定。
+            if (activeHandle === 'tl') {
+                // 左上をドラッグ。右下(x+w, y+h)が固定。
+                cropRect.x += dx;
+                cropRect.y += dy;
+                cropRect.w -= dx;
+                cropRect.h -= dy;
+            } else if (activeHandle === 'tr') {
+                // 右上をドラッグ。左下(x, y+h)が固定。
+                cropRect.y += dy;
+                cropRect.w += dx;
+                cropRect.h -= dy;
+            } else if (activeHandle === 'br') {
+                // 右下をドラッグ。左上(x, y)が固定。
+                cropRect.w += dx;
+                cropRect.h += dy;
+            } else if (activeHandle === 'bl') {
+                // 左下をドラッグ。右上(x+w, y)が固定。
+                cropRect.x += dx;
+                cropRect.w -= dx;
+                cropRect.h += dy;
+            }
+
+            // キャンバス内に収めるバウンディングチェック
+            cropRect.x = Math.max(0, Math.min(cropRect.x, canvas.width - 10));
+            cropRect.y = Math.max(0, Math.min(cropRect.y, canvas.height - 10));
+            
+            // 幅・高さが負にならないように規制（最小サイズ10px）
+            if (cropRect.w < 10) {
+                if (activeHandle === 'tl' || activeHandle === 'bl') cropRect.x -= (10 - cropRect.w);
+                cropRect.w = 10;
+            }
+            if (cropRect.h < 10) {
+                if (activeHandle === 'tl' || activeHandle === 'tr') cropRect.y -= (10 - cropRect.h);
+                cropRect.h = 10;
+            }
 
             lastTouch = pos;
             render();
         }
 
-        function onEnd() { dragTarget = null; }
+        function onEnd() { activeHandle = null; }
 
         canvas.addEventListener('touchstart', onStart, {passive: false});
-        window.addEventListener('touchmove', onMove, {passive: false});
+        window.addEventListener('touchmove', onMove, { passive: false });
         window.addEventListener('touchend', onEnd);
         canvas.addEventListener('mousedown', onStart);
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onEnd);
 
-        function toggleCrop() {
-            isCropMode = !isCropMode;
-            document.getElementById('crop-toggle').classList.toggle('active');
-            document.getElementById('exec-crop').style.display = isCropMode ? 'inline-block' : 'none';
-            render();
-        }
-
+        // 切り抜き実行
         function executeCrop() {
+            if (cropRect.w < 10 || cropRect.h < 10) return;
+
             const temp = document.createElement('canvas');
-            temp.width = crop.w; temp.height = crop.h;
-            temp.getContext('2d').putImageData(ctx.getImageData(crop.x, crop.y, crop.w, crop.h), 0, 0);
-            img.src = temp.toDataURL();
-            rotation = 0;
-            toggleCrop();
+            temp.width = cropRect.w; temp.height = cropRect.h;
+            //willReadFrequentlyを設定して getImageDataの速度低下を防ぐ
+            temp.getContext('2d').putImageData(ctx.getImageData(cropRect.x, cropRect.y, cropRect.w, cropRect.h), 0, 0);
+
+            // 切り抜いた結果を新しい画像として読み込む
+            rawImg.src = temp.toDataURL();
+            
+            // 状態をリセット
+            baseFixedRotation = 0;
+            document.getElementById('fine-rotate').value = 0;
+            document.getElementById('angle-val').textContent = "0°";
+            toggleCropMode(); // 枠を閉じる
         }
 
         function saveImage() {
             const link = document.createElement('a');
-            link.download = "edit.png";
-            link.href = canvas.toDataURL();
+            link.download = 'edited_image.png';
+            link.href = canvas.toDataURL("image/png");
             link.click();
         }
     </script>
