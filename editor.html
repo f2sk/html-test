@@ -2,30 +2,32 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ultimate Image Editor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Advanced Image Editor</title>
     <style>
-        body { font-family: sans-serif; text-align: center; background: #222; color: #fff; margin: 0; padding: 10px; }
-        .controls { background: #333; padding: 15px; border-radius: 12px; max-width: 500px; margin: 0 auto 10px; display: flex; flex-direction: column; gap: 10px; }
-        .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
-        input[type="range"] { flex-grow: 1; }
+        :root { --primary: #007bff; --success: #28a745; --bg: #1a1a1a; }
+        body { font-family: sans-serif; text-align: center; background: var(--bg); color: #fff; margin: 0; padding: 10px; touch-action: manipulation; }
+        .controls { background: #333; padding: 15px; border-radius: 12px; max-width: 500px; margin: 0 auto 10px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; }
+        input[type="range"] { flex-grow: 1; accent-color: var(--primary); }
+        select { padding: 5px; border-radius: 4px; background: #444; color: white; border: 1px solid #666; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-        button { padding: 10px 5px; border: none; border-radius: 6px; background: #444; color: white; font-size: 12px; cursor: pointer; }
-        button.primary { background: #007bff; }
-        button.success { background: #28a745; }
+        button { padding: 12px 5px; border: none; border-radius: 8px; background: #555; color: white; font-weight: bold; cursor: pointer; }
+        button.active { background: var(--primary); }
+        .save-btn { background: var(--success); grid-column: span 3; margin-top: 5px; }
         
-        .canvas-container { position: relative; display: inline-block; margin-top: 10px; line-height: 0; }
+        .canvas-area { position: relative; display: inline-block; margin-top: 10px; overflow: hidden; line-height: 0; border-radius: 4px; }
         canvas { 
-            max-width: 100%; height: auto; border: 1px solid #555;
-            background-image: linear-gradient(45deg, #333 25%, transparent 25%), linear-gradient(-45deg, #333 25%, transparent 25%),
-                              linear-gradient(45deg, transparent 75%, #333 75%), linear-gradient(-45deg, transparent 75%, #333 75%);
-            background-size: 20px 20px; background-color: #444;
+            max-width: 100%; height: auto; 
+            background-image: linear-gradient(45deg, #2a2a2a 25%, transparent 25%), linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
+                              linear-gradient(45deg, transparent 75%, #2a2a2a 75%), linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
+            background-size: 20px 20px; background-color: #333;
         }
-        /* 切り抜きガイド枠 */
         #crop-guide {
-            position: absolute; border: 2px dashed #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,0.5);
-            pointer-events: none; display: none; box-sizing: border-box;
+            position: absolute; border: 2px solid #fff; box-shadow: 0 0 0 9999px rgba(0,0,0,0.6);
+            cursor: move; display: none; box-sizing: border-box; touch-action: none;
         }
+        #crop-guide::after { content: "DRAG TO MOVE"; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 10px; opacity: 0.6; white-space: nowrap; pointer-events: none; }
     </style>
 </head>
 <body>
@@ -34,22 +36,25 @@
 
     <div class="controls">
         <div class="row">
-            <label>緑除去</label>
+            <select id="color-mode">
+                <option value="green">グリーンバック除去</option>
+                <option value="blue">ブルーバック除去</option>
+            </select>
             <input type="range" id="threshold" min="0" max="200" value="50">
         </div>
         <div class="row">
             <label>枠サイズ</label>
-            <input type="range" id="crop-size" min="10" max="100" value="80">
+            <input type="range" id="crop-size-slider" min="10" max="100" value="50">
         </div>
         <div class="btn-group">
             <button onclick="rotateImage()">90度回転</button>
-            <button id="crop-btn" class="primary" onclick="toggleCropMode()">切り抜き枠</button>
-            <button id="exec-crop" class="primary" style="display:none;" onclick="executeCrop()">実行</button>
-            <button class="success" onclick="saveImage()">PNG保存</button>
+            <button id="crop-mode-btn" onclick="toggleCropMode()">切り抜き枠</button>
+            <button id="exec-crop-btn" style="display:none; background: var(--primary);" onclick="executeCrop()">実行</button>
+            <button class="save-btn" onclick="saveImage()">透過PNGとして保存</button>
         </div>
     </div>
 
-    <div class="canvas-container">
+    <div class="canvas-area" id="container">
         <canvas id="canvas"></canvas>
         <div id="crop-guide"></div>
     </div>
@@ -59,13 +64,17 @@
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         const guide = document.getElementById('crop-guide');
         const thresholdInput = document.getElementById('threshold');
-        const cropSizeInput = document.getElementById('crop-size');
+        const colorMode = document.getElementById('color-mode');
+        const cropSlider = document.getElementById('crop-size-slider');
         
         let originalImageData = null;
         let isCropMode = false;
+        let guideX = 0, guideY = 0; // 枠の座標
 
-        // 画像読み込み
+        // 画像読込
         document.getElementById('upload').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
             const reader = new FileReader();
             reader.onload = (f) => {
                 const img = new Image();
@@ -74,68 +83,106 @@
                     canvas.height = img.height;
                     ctx.drawImage(img, 0, 0);
                     saveState();
-                    applyChromaKey();
+                    applyFilter();
                 };
                 img.src = f.target.result;
             };
-            reader.readAsDataURL(e.target.files[0]);
+            reader.readAsDataURL(file);
         });
 
         function saveState() {
             originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         }
 
-        // グリーンバック除去
-        thresholdInput.addEventListener('input', applyChromaKey);
-        function applyChromaKey() {
+        // フィルタ適用（緑or青）
+        thresholdInput.oninput = applyFilter;
+        colorMode.onchange = applyFilter;
+
+        function applyFilter() {
             if (!originalImageData) return;
             const newImgData = new ImageData(new Uint8ClampedArray(originalImageData.data), originalImageData.width, originalImageData.height);
             const data = newImgData.data;
             const t = parseInt(thresholdInput.value);
+            const mode = colorMode.value;
+
             for (let i = 0; i < data.length; i += 4) {
-                if (data[i+1] - (data[i] + data[i+2])/2 > t) data[i+3] = 0;
+                const r = data[i], g = data[i+1], b = data[i+2];
+                let diff = (mode === 'green') ? (g - (r + b) / 2) : (b - (r + g) / 2);
+                if (diff > t) data[i+3] = 0;
             }
             ctx.putImageData(newImgData, 0, 0);
         }
 
-        // 切り抜きモード切替
+        // 切り抜きモード制御
         function toggleCropMode() {
             isCropMode = !isCropMode;
             guide.style.display = isCropMode ? 'block' : 'none';
-            document.getElementById('exec-crop').style.display = isCropMode ? 'inline-block' : 'none';
-            document.getElementById('crop-btn').textContent = isCropMode ? 'キャンセル' : '切り抜き枠';
-            if (isCropMode) updateCropGuide();
+            document.getElementById('exec-crop-btn').style.display = isCropMode ? 'inline-block' : 'none';
+            document.getElementById('crop-mode-btn').classList.toggle('active');
+            if (isCropMode) {
+                guideX = canvas.clientWidth * 0.1;
+                guideY = canvas.clientWidth * 0.1;
+                updateGuidePos();
+            }
         }
 
-        cropSizeInput.addEventListener('input', updateCropGuide);
-        function updateCropGuide() {
-            if (!isCropMode) return;
+        cropSlider.oninput = updateGuidePos;
+        function updateGuidePos() {
             const rect = canvas.getBoundingClientRect();
-            const percent = cropSizeInput.value / 100;
-            const size = Math.min(rect.width, rect.height) * percent;
+            const size = (rect.width * cropSlider.value) / 100;
             guide.style.width = size + 'px';
             guide.style.height = size + 'px';
-            guide.style.top = (rect.height - size) / 2 + 'px';
-            guide.style.left = (rect.width - size) / 2 + 'px';
+            // 境界チェック
+            guideX = Math.max(0, Math.min(guideX, rect.width - size));
+            guideY = Math.max(0, Math.min(guideY, rect.height - size));
+            guide.style.left = guideX + 'px';
+            guide.style.top = guideY + 'px';
         }
 
-        // 切り抜き実行
+        // ドラッグ移動の実装 (マウス/タッチ両対応)
+        let isDragging = false;
+        let startX, startY;
+
+        const startDrag = (e) => {
+            isDragging = true;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            startX = clientX - guideX;
+            startY = clientY - guideY;
+        };
+
+        const doDrag = (e) => {
+            if (!isDragging) return;
+            e.preventDefault();
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+            guideX = clientX - startX;
+            guideY = clientY - startY;
+            updateGuidePos();
+        };
+
+        const stopDrag = () => isDragging = false;
+
+        guide.addEventListener('mousedown', startDrag);
+        window.addEventListener('mousemove', doDrag);
+        window.addEventListener('mouseup', stopDrag);
+        guide.addEventListener('touchstart', startDrag);
+        window.addEventListener('touchmove', doDrag, { passive: false });
+        window.addEventListener('touchend', stopDrag);
+
         function executeCrop() {
             const rect = canvas.getBoundingClientRect();
             const scale = canvas.width / rect.width;
+            const x = guideX * scale;
+            const y = guideY * scale;
             const size = parseFloat(guide.style.width) * scale;
-            const x = (canvas.width - size) / 2;
-            const y = (canvas.height - size) / 2;
 
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = size;
-            tempCanvas.height = size;
-            tempCanvas.getContext('2d').putImageData(ctx.getImageData(x, y, size, size), 0, 0);
+            const temp = document.createElement('canvas');
+            temp.width = size; temp.height = size;
+            temp.getContext('2d').putImageData(ctx.getImageData(x, y, size, size), 0, 0);
 
-            canvas.width = size;
-            canvas.height = size;
-            ctx.drawImage(tempCanvas, 0, 0);
-            
+            canvas.width = size; canvas.height = size;
+            ctx.drawImage(temp, 0, 0);
             saveState();
             toggleCropMode();
         }
@@ -150,12 +197,13 @@
             canvas.width = temp.width; canvas.height = temp.height;
             ctx.drawImage(temp, 0, 0);
             saveState();
+            if(isCropMode) updateGuidePos();
         }
 
         function saveImage() {
             const link = document.createElement('a');
-            link.download = 'crop_edit.png';
-            link.href = canvas.toDataURL();
+            link.download = 'result.png';
+            link.href = canvas.toDataURL("image/png");
             link.click();
         }
     </script>
