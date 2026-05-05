@@ -2,73 +2,63 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Web Cam Fixed v3.0</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Web Cam Tool v4.0</title>
     <style>
-        /* 100vhに頼らず、html/bodyを強制的に画面いっぱいに広げる */
+        /* 100vhの不安定さを解消 */
+        :root { --app-height: 100vh; }
+
         html, body { 
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             margin: 0; padding: 0; overflow: hidden; 
             background: #000; color: white;
             display: flex; flex-direction: column;
+            height: var(--app-height);
         }
 
-        /* プレビューエリア：残りの高さを全部使う */
+        /* プレビューエリア */
         #viewport { 
-            flex: 1;
-            position: relative; 
-            width: 100%; 
-            background: #111;
-            overflow: hidden;
-            z-index: 1;
+            flex: 1; position: relative; width: 100%; 
+            background: #111; overflow: hidden; z-index: 1;
         }
         video { width: 100%; height: 100%; object-fit: contain; }
 
-        /* フレーム：初期は隠すが、JSエラーでもボタンには影響しない位置 */
+        /* フレームレイヤー */
         #frame-layer { 
             position: absolute; top: 0; left: 0; 
             will-change: transform; touch-action: none; 
             z-index: 10; display: none; transform-origin: 0 0;
         }
-        #frame-img { display: block; pointer-events: none; }
+        #frame-img { 
+            display: block; pointer-events: none; 
+            transform-origin: center center;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
 
-        /* 操作パネル：確実に「下」に150px確保する */
+        /* 操作パネル：最下部に固定 */
         .controls { 
-            height: 160px; /* 高さを固定して確保 */
-            background: #1a1a1a; 
-            display: flex; flex-direction: column;
-            justify-content: center;
-            padding: 0 20px;
-            z-index: 100;
-            border-top: 2px solid #444;
+            height: 160px; background: #1a1a1a; 
+            display: flex; flex-direction: column; justify-content: center;
+            padding: 0 20px calc(env(safe-area-inset-bottom) / 2);
+            z-index: 100; border-top: 1px solid #333;
         }
 
         .button-group { display: flex; gap: 10px; height: 60px; align-items: center; }
         
         button, label { 
-            display: block;
-            background: #444; color: white; border: 2px solid #666; 
-            border-radius: 12px; font-size: 16px; font-weight: bold;
-            height: 50px; line-height: 50px;
-            cursor: pointer; flex: 1; text-align: center;
+            display: block; background: #333; color: white; border: 1px solid #555; 
+            border-radius: 14px; font-size: 14px; font-weight: bold;
+            height: 54px; line-height: 54px; cursor: pointer; flex: 1; text-align: center;
         }
-        #shutter { background: #d63031; border: none; flex: 1.5; }
+        #shutter { background: #e74c3c; border: none; flex: 1.5; }
         
-        #exposure-ui { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; height: 30px; visibility: hidden; }
-        input[type="range"] { flex: 1; height: 30px; }
+        #exposure-ui { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; height: 30px; visibility: hidden; }
+        input[type="range"] { flex: 1; accent-color: #f1c40f; }
 
-        /* デバッグ用エラー表示 */
-        #debug-log {
-            position: absolute; top: 0; left: 0; width: 100%; 
-            background: rgba(255,0,0,0.7); color: white; font-size: 10px; z-index: 999;
-            pointer-events: none;
-        }
+        canvas { display: none; }
     </style>
 </head>
 <body>
-
-<div id="debug-log"></div>
 
 <div id="viewport">
     <video id="video" autoplay playsinline></video>
@@ -77,7 +67,7 @@
 
 <div class="controls">
     <div id="exposure-ui">
-        <span style="font-size:10px">BRIGHT</span>
+        <span style="font-size:10px; color:#aaa;">BRIGHTNESS</span>
         <input type="range" id="exposure-slider" step="0.1">
     </div>
     <div class="button-group">
@@ -87,13 +77,15 @@
     </div>
 </div>
 
-<canvas id="canvas-output" style="display:none;"></canvas>
+<canvas id="canvas-output"></canvas>
 
 <script>
-    const log = (msg) => { document.getElementById('debug-log').innerText += msg + "\n"; };
-    
-    // エラーハンドリング
-    window.onerror = (m, u, l) => log(`Error: ${m} at line ${l}`);
+    // 画面高さを固定する関数
+    function lockHeight() {
+        document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+    }
+    window.addEventListener('resize', lockHeight);
+    lockHeight();
 
     const video = document.getElementById('video');
     const frameLayer = document.getElementById('frame-layer');
@@ -104,13 +96,14 @@
     const viewport = document.getElementById('viewport');
 
     let videoTrack = null;
+    let currentRotation = 0; 
     let state = { x: 0, y: 0, scale: 1, lastX: 0, lastY: 0, lastDist: 0 };
 
-    async function init() {
-        log("Checking devices...");
+    // 1. カメラ起動
+    async function startCamera() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+                video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
             });
             video.srcObject = stream;
             videoTrack = stream.getVideoTracks()[0];
@@ -122,13 +115,10 @@
                 exposureSlider.max = caps.exposureCompensation.max;
                 exposureSlider.value = 0;
             }
-            log("Camera OK");
-        } catch (err) {
-            log("Camera Error: " + err.message);
-        }
+        } catch (err) { console.error("Camera Access Denied:", err); }
     }
 
-    // PNG選択時の処理
+    // 2. PNG読み込み & 初期配置
     document.getElementById('file-input').addEventListener('change', (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -138,7 +128,9 @@
             frameImg.onload = () => {
                 const vW = viewport.clientWidth;
                 const vH = viewport.clientHeight;
-                state.scale = (vW * 0.8) / frameImg.naturalWidth;
+                // 初期スケール：画面幅の70%
+                state.scale = (vW * 0.7) / frameImg.naturalWidth;
+                // 初期位置：中央
                 state.x = (vW - (frameImg.naturalWidth * state.scale)) / 2;
                 state.y = (vH - (frameImg.naturalHeight * state.scale)) / 2;
                 frameLayer.style.display = 'block';
@@ -148,15 +140,23 @@
         reader.readAsDataURL(file);
     });
 
-    // タッチイベント
+    // 3. 90度刻みの回転制御
+    function handleOrientation() {
+        const orient = window.orientation || 0;
+        // デバイスの回転を打ち消すようにフレームを回す
+        currentRotation = -orient; 
+        updateTransform();
+    }
+    window.addEventListener("orientationchange", handleOrientation);
+
+    // 4. 操作(移動・拡大)
     viewport.addEventListener('touchstart', (e) => {
-        if (e.target.closest('#frame-layer')) {
-            if (e.touches.length === 1) {
-                state.lastX = e.touches[0].clientX - state.x;
-                state.lastY = e.touches[0].clientY - state.y;
-            } else if (e.touches.length === 2) {
-                state.lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-            }
+        if (!e.target.closest('#frame-layer')) return;
+        if (e.touches.length === 1) {
+            state.lastX = e.touches[0].clientX - state.x;
+            state.lastY = e.touches[0].clientY - state.y;
+        } else if (e.touches.length === 2) {
+            state.lastDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
         }
     });
 
@@ -175,6 +175,7 @@
     }, { passive: false });
 
     function updateTransform() {
+        frameImg.style.transform = `rotate(${currentRotation}deg)`;
         frameLayer.style.transform = `translate(${state.x}px, ${state.y}px) scale(${state.scale})`;
     }
 
@@ -182,7 +183,7 @@
         if (videoTrack) videoTrack.applyConstraints({ advanced: [{ exposureCompensation: parseFloat(e.target.value) }] });
     });
 
-    // 撮影合成
+    // 5. 撮影 & 合成
     document.getElementById('shutter').addEventListener('click', () => {
         const ctx = canvas.getContext('2d');
         canvas.width = video.videoWidth;
@@ -204,21 +205,34 @@
         realY = rect.top + (vH - realH) / 2;
 
         const s = canvas.width / realW;
+
+        // ビデオ描画
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         if (frameImg.src && frameLayer.style.display !== 'none') {
-            ctx.drawImage(frameImg, (state.x - realX) * s, (state.y - realY) * s, 
-                          (frameImg.naturalWidth * state.scale) * s, (frameImg.naturalHeight * state.scale) * s);
+            ctx.save();
+            const drawW = (frameImg.naturalWidth * state.scale) * s;
+            const drawH = (frameImg.naturalHeight * state.scale) * s;
+            const centerX = (state.x - realX) * s + drawW / 2;
+            const centerY = (state.y - realY) * s + drawH / 2;
+
+            ctx.translate(centerX, centerY);
+            ctx.rotate(currentRotation * Math.PI / 180);
+            ctx.drawImage(frameImg, -drawW / 2, -drawH / 2, drawW, drawH);
+            ctx.restore();
         }
 
+        // JPEG保存
         const link = document.createElement('a');
-        link.download = `photo_${Date.now()}.jpg`;
+        link.download = `cam_${Date.now()}.jpg`;
         link.href = canvas.toDataURL('image/jpeg', 0.9);
         link.click();
     });
 
-    // 起動
-    init();
+    window.onload = () => {
+        startCamera();
+        handleOrientation();
+    };
 </script>
 </body>
 </html>
